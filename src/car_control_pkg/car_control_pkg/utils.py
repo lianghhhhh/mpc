@@ -75,13 +75,18 @@ def angleToDegree(data):
 
 def loadModelFunc():
     model = CarPredictor()
-    model.load_state_dict(torch.load('/home/selena/mpc/model.pth'))
-    l4c_model = l4c.L4CasADi(model, device='cuda')
+    model.load_state_dict(torch.load('/workspaces/model.pth'))
+    model.to('cpu')
+    model.eval()
+    l4c_model = l4c.L4CasADi(model, device='cpu')
     x_sym = ca.SX.sym('x', 4)
     u_sym = ca.SX.sym('u', 4)
-    A_sym, B_sym = l4c_model(u_sym, x_sym)
+    input_sym = ca.vertcat(x_sym, u_sym)
+    output_sym = l4c_model(input_sym)
+    A_sym = output_sym[:, :16].reshape((4, 4))  # A: shape (4,4)
+    B_sym = output_sym[:, 16:].reshape((4, 4))  # B: shape (4,4)
     x_next_sym = x_sym + (ca.mtimes(A_sym, x_sym) + ca.mtimes(B_sym, u_sym)) * 0.01
-    nn_model_func = ca.Function('nn_model_func', [x_sym, u_sym], [x_next_sym], ['x', 'u'], ['x_next'])
+    nn_model_func = ca.Function('nn_model_func', [input_sym], [x_next_sym], ['input'], ['x_next'])
     return nn_model_func
 
 def createMpcSolver(nn_model_func, N=10):
@@ -98,18 +103,19 @@ def createMpcSolver(nn_model_func, N=10):
     control_cost_weight = ca.diag(ca.DM([1, 1, 0.1, 0.1]))
     for t in range(N):
         position_error = next_x_pred[t, :2] - target_path[t, :]
-        cost += ca.mtimes([position_error.T, state_cost_weight[:2, :2], position_error])
+        cost += ca.mtimes([position_error, state_cost_weight[:2, :2], position_error.T])
         control_effort = u_pred[t, :]
-        cost += ca.mtimes([control_effort.T, control_cost_weight, control_effort])
+        cost += ca.mtimes([control_effort, control_cost_weight, control_effort.T])
 
     opti.minimize(cost)
 
     for t in range(N):
         x_t = next_x_pred[t, :]
         u_t = u_pred[t, :]
-        x_next_pred_t = nn_model_func(x_t, u_t)
-        opti.subject_to(next_x_pred[t+1, :] == x_next_pred_t)
-    opti.subject_to(next_x_pred[0, :] == current_x)
+        input_t = ca.vertcat(x_t.T, u_t.T) # Shape (8, 1)
+        x_next_pred_t = nn_model_func(input_t)
+        opti.subject_to(next_x_pred[t+1, :] == x_next_pred_t.T)
+    opti.subject_to(next_x_pred[0, :] == current_x.T)
     opts = {"ipopt.print_level":0, "print_time":0}
     opti.solver('ipopt', opts)
     return opti, u_pred, next_x_pred, current_x, target_path

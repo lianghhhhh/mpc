@@ -4,8 +4,7 @@ from car_control_pkg.car_state_node import CarStateNode
 from car_control_pkg.car_control_node import CarControlNode
 from car_control_pkg.path_points_node import PathPointsNode
 
-
-if __name__ == '__main__':
+def main():
     rclpy.init()
 
     car_state_node = CarStateNode()
@@ -23,3 +22,6 @@ if __name__ == '__main__':
         pass
     finally:
         rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

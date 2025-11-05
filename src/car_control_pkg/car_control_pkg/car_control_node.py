@@ -30,6 +30,9 @@ class CarControlNode(Node):
     def find_control_command(self, N=10):
         current_state = self.car_state_node.car_state
         path_points = self.path_points_node.path_points[:(N+1)*2]
+        if len(current_state) != 4 or len(path_points) != (N+1)*2:
+            self.get_logger().warn('Insufficient data for MPC computation.')
+            return
         target_path_data = ca.DM(path_points).reshape((N+1, 2))
 
         self._solver.set_value(self._current_x, current_state)

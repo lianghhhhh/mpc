@@ -21,15 +21,17 @@ class CarPredictor(nn.Module):
 
         self.layer_norm = nn.LayerNorm(output_size)
 
-    def forward(self, u, x):
-        x_flat = x.view(-1, self.x_size)
-        u_flat = u.view(-1, self.u_size)
-        input_data = torch.cat((u_flat, x_flat), dim=1)
+    def forward(self, input):
+        # u = input[:self.u_size]
+        # x = input[self.u_size:self.u_size + self.x_size]
+        # u_flat = u.view(-1, self.u_size)
+        # x_flat = x.view(-1, self.x_size)
+        input_flat = input.view(-1, self.input_size)
 
-        outputs = self.model(input_data)
+        outputs = self.model(input_flat)
         outputs = self.layer_norm(outputs)
 
-        A = outputs[:, :self.x_size * self.x_size].reshape(-1, self.x_size, self.x_size)
-        B = outputs[:, self.x_size * self.x_size:self.x_size * self.x_size + self.x_size * self.u_size].reshape(-1, self.x_size, self.u_size)
+        # A = outputs[:, :self.x_size * self.x_size].reshape(-1, self.x_size, self.x_size)
+        # B = outputs[:, self.x_size * self.x_size:self.x_size * self.x_size + self.x_size * self.u_size].reshape(-1, self.x_size, self.u_size)
 
-        return A, B
+        return outputs
