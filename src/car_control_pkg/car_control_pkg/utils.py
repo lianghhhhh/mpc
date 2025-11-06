@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import torch
+import joblib
 import numpy as np
 import casadi as ca
 import l4casadi as l4c
@@ -50,18 +51,24 @@ def computeTarget(u_tensor, x_data, A, B, dt=0.01):
 
     return next_x
 
-def normalize(data, name="data"):
-    if name == "x":
-        # normalize on first 2 features only (x,z positions)
-        scaler = StandardScaler()
-        data[:, :, :2] = scaler.fit_transform(data[:, :, :2].reshape(-1, 2)).reshape(data[:, :, :2].shape)
-    else:
-        scaler = StandardScaler()
-        original_shape = data.shape
-        data_reshaped = data.reshape(-1, original_shape[-1])
-        data_normalized = scaler.fit_transform(data_reshaped)
-        data = data_normalized.reshape(original_shape)
-    return data, scaler
+def normalize(data, name):
+    scaler_path = f'/workspaces/{name}_scaler.save'
+    scaler = joblib.load(scaler_path)
+    if name == "u":
+        data = scaler.transform(data)
+    elif name == "x":
+        data = np.array(data)
+        data[:2] = scaler.transform(data[:2].reshape(-1, 2)).reshape(data[:2].shape)
+    return data
+
+def denormalize(data, name):
+    scaler_path = f'/workspaces/{name}_scaler.save'
+    scaler = joblib.load(scaler_path)
+    if name == "u":
+        data = scaler.inverse_transform(data.reshape(-1, 4)).reshape(data.shape)
+    elif name == "x":
+        data[:2] = scaler.inverse_transform(data[:2])
+    return data
 
 def angleToDegree(data):
     sin_component = data[:, 2, :]
@@ -76,9 +83,10 @@ def angleToDegree(data):
 def loadModelFunc():
     model = CarPredictor()
     model.load_state_dict(torch.load('/workspaces/model.pth'))
-    model.to('cpu')
+    device = 'cuda' # if torch.cuda.is_available() else 'cpu'
+    model.to(device)
     model.eval()
-    l4c_model = l4c.L4CasADi(model, device='cpu')
+    l4c_model = l4c.L4CasADi(model, device=device)
     x_sym = ca.SX.sym('x', 4)
     u_sym = ca.SX.sym('u', 4)
     input_sym = ca.vertcat(x_sym, u_sym)
@@ -100,13 +108,16 @@ def createMpcSolver(nn_model_func, N=10):
 
     cost = 0
     state_cost_weight = ca.diag(ca.DM([10, 10, 1, 1]))
-    control_cost_weight = ca.diag(ca.DM([1, 1, 0.1, 0.1]))
+    control_cost_weight = ca.diag(ca.DM([1, 1, 1, 1]))
+    avg_velocity = 0.01 # desired average velocity
     for t in range(N):
         position_error = next_x_pred[t, :2] - target_path[t, :]
-        cost += ca.mtimes([position_error, state_cost_weight[:2, :2], position_error.T])
-        control_effort = u_pred[t, :]
-        cost += ca.mtimes([control_effort, control_cost_weight, control_effort.T])
-
+        cost += ca.mtimes([position_error, state_cost_weight[:2, :2], position_error.T]) # position error cost
+        # control_effort = u_pred[t, :]
+        # cost += ca.mtimes([control_effort, control_cost_weight, control_effort.T]) # control effort cost
+        avg_u_pred = ca.sum(u_pred[t, :]) / 4.0
+        velocity_error = avg_u_pred - avg_velocity
+        cost += 10 * velocity_error**2  # velocity error cost
     opti.minimize(cost)
 
     for t in range(N):
@@ -116,6 +127,7 @@ def createMpcSolver(nn_model_func, N=10):
         x_next_pred_t = nn_model_func(input_t)
         opti.subject_to(next_x_pred[t+1, :] == x_next_pred_t.T)
     opti.subject_to(next_x_pred[0, :] == current_x.T)
+    # opti.subject_to(opti.bounded(-1.0, u_pred, 1.0))
     opts = {"ipopt.print_level":0, "print_time":0}
     opti.solver('ipopt', opts)
     return opti, u_pred, next_x_pred, current_x, target_path
