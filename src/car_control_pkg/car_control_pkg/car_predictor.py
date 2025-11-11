@@ -34,4 +34,12 @@ class CarPredictor(nn.Module):
         # A = outputs[:, :self.x_size * self.x_size].reshape(-1, self.x_size, self.x_size)
         # B = outputs[:, self.x_size * self.x_size:self.x_size * self.x_size + self.x_size * self.u_size].reshape(-1, self.x_size, self.u_size)
 
+        # u_data = input_flat[:, :self.u_size].reshape(-1, self.u_size, 1)
+        # x_data = input_flat[:, self.u_size:self.u_size + self.x_size].reshape(-1, self.x_size, 1)
+
+        # x_dot = torch.bmm(A, x_data) + torch.bmm(B, u_data)  # x' = Ax + Bu
+        # next_x = x_data + x_dot * 0.1  # Euler integration: x_next = x + x' * dt
+
+        # next_x = next_x.reshape(-1, self.x_size)
+
         return outputs

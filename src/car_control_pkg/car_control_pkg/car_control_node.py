@@ -13,14 +13,14 @@ class CarControlNode(Node):
         self.rear_wheel_pub = self.create_publisher(Float32MultiArray, "car_C_rear_wheel", 10)
         self.car_state_node = car_state_node
         self.path_points_node = path_points_node
-        self.x_scaler = joblib.load('/workspaces/x_scaler.save')
-        self.u_scaler = joblib.load('/workspaces/u_scaler.save')
+        self.x_scaler = joblib.load('/workspaces/model_6/x_scaler.save')
+        self.u_scaler = joblib.load('/workspaces/model_6/u_scaler.save')
         # MPC/cache handles
         self._model_func = loadModelFunc()
         self._solver, self._u_pred, self._next_x_pred, self._current_x, self._target_path = createMpcSolver(self._model_func, N=10)
 
         # Run MPC periodically while the node is spinning (10 Hz)
-        self.create_timer(0.01, lambda: self.find_control_command(10))
+        self.create_timer(0.1, lambda: self.find_control_command(10))
 
     def publish_control_command(self, control_input):
         self.get_logger().info(f'Publishing control command: {control_input}')
@@ -34,19 +34,23 @@ class CarControlNode(Node):
 
     def find_control_command(self, N=10):
         current_state = self.car_state_node.car_state
-        path_points = self.path_points_node.get_near_points(current_state[0:2], num_points=(N+1)*2)
+        path_points = self.path_points_node.get_near_points(current_state[:2], num_points=(N+1))
         if len(current_state) != 4:
             self.get_logger().warn(f'Invalid car state received: {current_state}')
             return
-        if len(path_points) != (N+1)*2:
+        if len(path_points) != (N+1):
             self.get_logger().warn(f'Invalid path points received: {path_points}')
             return
         
-        current_state = normalize(current_state, "x", self.x_scaler)
-        path_points = normalize(np.array(path_points).reshape(2, -1), "x", self.x_scaler) # reshape to (N+1, 2)
-        target_path_data = ca.DM(path_points).reshape((N+1, 2))
+        current_state = normalize(current_state, "state", self.x_scaler)
+        path_points = normalize(path_points, "path", self.x_scaler)
+        state_data = ca.DM(current_state)
+        target_path_data = ca.DM(path_points)
 
-        self._solver.set_value(self._current_x, current_state)
+        self.get_logger().info(f'Normalized current state: {state_data}')
+        self.get_logger().info(f'Normalized target path: {target_path_data}')
+
+        self._solver.set_value(self._current_x, state_data)
         self._solver.set_value(self._target_path, target_path_data)
 
         try:
