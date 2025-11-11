@@ -1,3 +1,4 @@
+import joblib
 import numpy as np
 import casadi as ca
 from rclpy.node import Node
@@ -12,6 +13,8 @@ class CarControlNode(Node):
         self.rear_wheel_pub = self.create_publisher(Float32MultiArray, "car_C_rear_wheel", 10)
         self.car_state_node = car_state_node
         self.path_points_node = path_points_node
+        self.x_scaler = joblib.load('/workspaces/x_scaler.save')
+        self.u_scaler = joblib.load('/workspaces/u_scaler.save')
         # MPC/cache handles
         self._model_func = loadModelFunc()
         self._solver, self._u_pred, self._next_x_pred, self._current_x, self._target_path = createMpcSolver(self._model_func, N=10)
@@ -39,8 +42,8 @@ class CarControlNode(Node):
             self.get_logger().warn(f'Invalid path points received: {path_points}')
             return
         
-        current_state = normalize(current_state, "x")
-        path_points = normalize(np.array(path_points).reshape(2, -1), "x") # reshape to (N+1, 2)
+        current_state = normalize(current_state, "x", self.x_scaler)
+        path_points = normalize(np.array(path_points).reshape(2, -1), "x", self.x_scaler) # reshape to (N+1, 2)
         target_path_data = ca.DM(path_points).reshape((N+1, 2))
 
         self._solver.set_value(self._current_x, current_state)
@@ -50,7 +53,7 @@ class CarControlNode(Node):
             solution = self._solver.solve()
             optimal_control = solution.value(self._u_pred)
             control_input = optimal_control[0, :]
-            control_input = denormalize(control_input, "u")
+            control_input = denormalize(control_input, "u", self.u_scaler)
             self.publish_control_command(control_input)
         except Exception as e:
             self.get_logger().error(f'MPC solver failed: {e}')

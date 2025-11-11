@@ -51,9 +51,10 @@ def computeTarget(u_tensor, x_data, A, B, dt=0.01):
 
     return next_x
 
-def normalize(data, name):
-    scaler_path = f'/workspaces/{name}_scaler.save'
-    scaler = joblib.load(scaler_path)
+def normalize(data, name, scaler=None):
+    if scaler is None:
+        scaler_path = f'/workspaces/{name}_scaler.save'
+        scaler = joblib.load(scaler_path)
     if name == "u":
         data = scaler.transform(data)
     elif name == "x":
@@ -61,9 +62,10 @@ def normalize(data, name):
         data[:2] = scaler.transform(data[:2].reshape(-1, 2)).reshape(data[:2].shape)
     return data
 
-def denormalize(data, name):
-    scaler_path = f'/workspaces/{name}_scaler.save'
-    scaler = joblib.load(scaler_path)
+def denormalize(data, name, scaler=None):
+    if scaler is None:
+        scaler_path = f'/workspaces/{name}_scaler.save'
+        scaler = joblib.load(scaler_path)
     if name == "u":
         data = scaler.inverse_transform(data.reshape(-1, 4)).reshape(data.shape)
     elif name == "x":
