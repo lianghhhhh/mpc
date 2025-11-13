@@ -6,19 +6,22 @@ from std_msgs.msg import Float32MultiArray
 from car_control_pkg.utils import loadModelFunc, createMpcSolver, normalize, denormalize
 
 class CarControlNode(Node):
-    def __init__(self, car_state_node, path_points_node):
+    def __init__(self, car_state_node, path_points_node, model_path):
         super().__init__('car_control_node')
         self.get_logger().info('Car Control Node has been started.')
         self.front_wheel_pub = self.create_publisher(Float32MultiArray, "car_C_front_wheel", 10)
         self.rear_wheel_pub = self.create_publisher(Float32MultiArray, "car_C_rear_wheel", 10)
         self.car_state_node = car_state_node
         self.path_points_node = path_points_node
-        self.x_scaler = joblib.load('/workspaces/model_6/x_scaler.save')
-        self.u_scaler = joblib.load('/workspaces/model_6/u_scaler.save')
-        # MPC/cache handles
-        self._model_func = loadModelFunc()
-        self._solver, self._u_pred, self._next_x_pred, self._current_x, self._target_path = createMpcSolver(self._model_func, N=10)
 
+        self.model_path = model_path
+        self.x_scaler = joblib.load(f'{self.model_path}/x_scaler.save')
+        self.u_scaler = joblib.load(f'{self.model_path}/u_scaler.save')
+
+        # MPC/cache handles
+        self._model_func = loadModelFunc(self.model_path)
+        self._solver, self._u_pred, self._next_x_pred, self._current_x, self._target_path = createMpcSolver(self._model_func, N=10)
+        
         # Run MPC periodically while the node is spinning (10 Hz)
         self.create_timer(0.1, lambda: self.find_control_command(10))
 

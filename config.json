@@ -1,0 +1,7 @@
+{
+    "model_path": "/workspaces/model/model_u_zero",
+    "control_limits": {
+        "min": -1.0,
+        "max": 1.0
+    }
+}

@@ -10,8 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from car_control_pkg.car_predictor import CarPredictor
 
 def loadConfig():
-    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.json')
-    with open(config_path, 'r') as f:
+    with open('/workspaces/config.json', 'r') as f:
         config = json.load(f)
     return config
 
@@ -20,10 +19,7 @@ def computeTarget(u_tensor, x_data, A, B, dt=0.1):
     next_x = x_data + x_dot * dt  # Euler integration: x_next = x + x' * dt
     return next_x
 
-def normalize(data, name, scaler=None):
-    if scaler is None:
-        scaler_path = f'/workspaces/model_6/{name}_scaler.save'
-        scaler = joblib.load(scaler_path)
+def normalize(data, name, scaler):
     if name == "u":
         data = scaler.transform(data)
     elif name == "state": # x, z positions only
@@ -33,10 +29,7 @@ def normalize(data, name, scaler=None):
         data = scaler.transform(data)
     return data
 
-def denormalize(data, name, scaler=None):
-    if scaler is None:
-        scaler_path = f'/workspaces/model_6/{name}_scaler.save'
-        scaler = joblib.load(scaler_path)
+def denormalize(data, name, scaler):
     if name == "u":
         data = scaler.inverse_transform(data.reshape(-1, 4)).reshape(data.shape)
     elif name == "x":
@@ -53,10 +46,10 @@ def angleToDegree(data):
     data[:, 3, :] = 0  # set the cosine component to zero
     return data
 
-def loadModelFunc():
+def loadModelFunc(model_path):
     model = CarPredictor()
-    model.load_state_dict(torch.load('/workspaces/model_6/model_6.pth'))
-    device = 'cpu' # if torch.cuda.is_available() else 'cpu'
+    model.load_state_dict(torch.load(f'{model_path}/model.pth'))
+    device = 'cuda' # if torch.cuda.is_available() else 'cpu'
     model.to(device)
     model.eval()
     l4c_model = l4c.L4CasADi(model, device=device)
