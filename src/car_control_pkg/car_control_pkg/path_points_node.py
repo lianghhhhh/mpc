@@ -30,10 +30,8 @@ class PathPointsNode(Node):
         if index + num_points >= len(self.path_points):
             # If not enough points ahead, pad with the last point
             near_points = self.path_points[index:]
-            # padding = np.tile(self.path_points[-1], (num_points - len(near_points), 1))
-            # near_points = np.vstack([near_points, padding])
-            padding = self.path_points[:(index + num_points) - len(self.path_points)]
-            near_points.extend(padding)
+            padding = np.tile(self.path_points[-1], (num_points - len(near_points), 1))
+            near_points = np.vstack([near_points, padding])
         else:
             near_points = self.path_points[index:index + num_points]
         return near_points
