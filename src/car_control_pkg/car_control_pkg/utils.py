@@ -8,6 +8,7 @@ import casadi as ca
 import l4casadi as l4c
 from sklearn.preprocessing import StandardScaler
 from car_control_pkg.car_predictor import CarPredictor
+from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 
 def loadConfig():
     with open('/workspaces/config.json', 'r') as f:
@@ -48,7 +49,7 @@ def angleToDegree(data):
 
 def loadModelFunc(model_path):
     model = CarPredictor()
-    model.load_state_dict(torch.load(f'{model_path}/model.pth'))
+    model.load_state_dict(torch.load(f'{model_path}/model_6.pth'))
     device = 'cuda' # if torch.cuda.is_available() else 'cpu'
     model.to(device)
     model.eval()
@@ -61,7 +62,8 @@ def loadModelFunc(model_path):
     B_sym = output_sym[:, 16:].reshape((4, 4))  # B: shape (4,4)
     x_next_sym = x_sym + (ca.mtimes(A_sym, x_sym) + ca.mtimes(B_sym, u_sym)) * 0.1
     nn_model_func = ca.Function('nn_model_func', [input_sym], [x_next_sym], ['input'], ['x_next'])
-    return nn_model_func
+
+    return nn_model_func, l4c_model.shared_lib_dir, l4c_model.name
 
 def createMpcSolver(nn_model_func, N=10):
     opti = ca.Opti()
@@ -97,3 +99,62 @@ def createMpcSolver(nn_model_func, N=10):
     opts = {"ipopt.print_level":0, "print_time":0}
     opti.solver('ipopt', opts)
     return opti, u_pred, next_x_pred, current_x, target_path
+
+def createAcadosSolver(nn_model_func, lib_dir, lib_name, N=10):
+    ocp = AcadosOcp()
+    model = AcadosModel()
+    model.name = 'car_model'
+
+    x = ca.SX.sym('x', 4)
+    u = ca.SX.sym('u', 4)
+    p = ca.SX.sym('p', 2)
+    input_sym = ca.vertcat(u, x)
+    x_next = nn_model_func(input_sym)
+
+    model.x = x
+    model.u = u
+    model.p = p
+    model.disc_dyn_expr = x_next
+    ocp.model = model
+
+    ocp.solver_options.N_horizon = N
+    Tf = N * 0.1  # (N steps) * (0.1 s/step)
+    ocp.solver_options.tf = Tf
+
+    Q_pos = np.diag([1000.0, 1000.0]) # Position cost
+    R_ctrl = np.diag([0.0001, 0.0001, 0.0001, 0.0001]) # Control effort cost
+    W_speed = 0.01
+
+    position_error = x[:2] - p
+
+    stage_cost_expr = ca.mtimes([position_error.T, ca.DM(Q_pos), position_error]) \
+                      + ca.mtimes([u.T, ca.DM(R_ctrl), u])
+    terminal_cost_expr = ca.mtimes([position_error.T, ca.DM(Q_pos), position_error])
+
+    # --- Set cost for STAGE 0 ---
+    ocp.cost.cost_type_0 = 'EXTERNAL'
+    ocp.model.cost_expr_ext_cost_0 = stage_cost_expr
+
+    # --- Set cost for STAGES 1 to N-1 ---
+    ocp.cost.cost_type = 'EXTERNAL'
+    ocp.model.cost_expr_ext_cost = stage_cost_expr
+
+    # --- Set cost for STAGE N (Terminal) ---
+    ocp.cost.cost_type_e = 'EXTERNAL'
+    ocp.model.cost_expr_ext_cost_e = terminal_cost_expr   
+
+    ocp.constraints.x0 = np.zeros(4)
+    ocp.parameter_values = np.zeros(2)
+    ocp.constraints.lbu = np.array([-1.0, -1.0, -1.0, -1.0])
+    ocp.constraints.ubu = np.array([1.0, 1.0, 1.0, 1.0])
+    ocp.constraints.idxbu = np.array([0, 1, 2, 3])
+
+    ocp.solver_options.integrator_type = 'DISCRETE'
+    ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
+    ocp.solver_options.hessian_approx = 'GAUSS_NEWTON'
+    ocp.solver_options.nlp_solver_type = 'SQP_RTI'
+    ocp.solver_options.model_external_shared_lib_dir = lib_dir
+    ocp.solver_options.model_external_shared_lib_name = lib_name
+
+    acados_solver = AcadosOcpSolver(ocp, json_file='acados_ocp.json')
+    return acados_solver

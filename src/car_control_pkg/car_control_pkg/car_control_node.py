@@ -3,7 +3,7 @@ import numpy as np
 import casadi as ca
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
-from car_control_pkg.utils import loadModelFunc, createMpcSolver, normalize, denormalize
+from car_control_pkg.utils import loadModelFunc, createMpcSolver, normalize, denormalize, createAcadosSolver
 
 class CarControlNode(Node):
     def __init__(self, car_state_node, path_points_node, model_path):
@@ -19,8 +19,9 @@ class CarControlNode(Node):
         self.u_scaler = joblib.load(f'{self.model_path}/u_scaler.save')
 
         # MPC/cache handles
-        self._model_func = loadModelFunc(self.model_path)
-        self._solver, self._u_pred, self._next_x_pred, self._current_x, self._target_path = createMpcSolver(self._model_func, N=10)
+        self._model_func, self._lib_dir, self._lib_name = loadModelFunc(self.model_path)
+        # self._solver, self._u_pred, self._next_x_pred, self._current_x, self._target_path = createMpcSolver(self._model_func, N=10)
+        self._acados_solver = createAcadosSolver(self._model_func, self._lib_dir, self._lib_name, N=10)
         
         # Run MPC periodically while the node is spinning (10 Hz)
         self.create_timer(0.1, lambda: self.find_control_command(10))
@@ -45,22 +46,34 @@ class CarControlNode(Node):
             self.get_logger().warn(f'Invalid path points received: {path_points}')
             return
         
+        self.get_logger().info(f'Current state: {current_state}')
+        self.get_logger().info(f'Target path: {path_points}')
+        
         current_state = normalize(current_state, "state", self.x_scaler)
         path_points = normalize(path_points, "path", self.x_scaler)
-        state_data = ca.DM(current_state)
-        target_path_data = ca.DM(path_points)
+        # state_data = ca.DM(current_state)
+        # target_path_data = ca.DM(path_points)
 
-        self.get_logger().info(f'Normalized current state: {state_data}')
-        self.get_logger().info(f'Normalized target path: {target_path_data}')
-
-        self._solver.set_value(self._current_x, state_data)
-        self._solver.set_value(self._target_path, target_path_data)
+        # self._solver.set_value(self._current_x, state_data)
+        # self._solver.set_value(self._target_path, target_path_data)
+        self._acados_solver.set(0, "lbx", current_state)
+        self._acados_solver.set(0, "ubx", current_state)
+        for t in range(N+1):
+            self._acados_solver.set(t, "p", path_points[t, :])
 
         try:
-            solution = self._solver.solve()
-            optimal_control = solution.value(self._u_pred)
-            control_input = optimal_control[0, :]
+            # solution = self._solver.solve()
+            # optimal_control = solution.value(self._u_pred)
+            # control_input = optimal_control[0, :]
+            # control_input = denormalize(control_input, "u", self.u_scaler)
+            # self.publish_control_command(control_input)
+            status = self._acados_solver.solve()
+            if status != 0:
+                self.get_logger().error(f'Acados solver failed with status {status}')
+                return
+            control_input = self._acados_solver.get(0, "u")
             control_input = denormalize(control_input, "u", self.u_scaler)
             self.publish_control_command(control_input)
+
         except Exception as e:
             self.get_logger().error(f'MPC solver failed: {e}')
