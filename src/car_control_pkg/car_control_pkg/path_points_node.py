@@ -18,13 +18,26 @@ class PathPointsNode(Node):
         self.get_logger().info(f'Received path points: {msg.data}')
         self.path_points = np.array(msg.data).reshape(-1, 2).tolist() # (N, 2) array of (x, z) points
 
-    def get_near_points(self, current_position, num_points=10):
+    def get_near_points(self, current_state, num_points):
         if len(self.path_points) == 0:
             return []
 
-        distances = np.linalg.norm(np.array(self.path_points) - current_position, axis=1)
+        current_pos = current_state[:2]
+        heading_vec = np.array([current_state[3], current_state[2]])  # [cos(theta), sin(theta)]
+
+        distances = np.linalg.norm(np.array(self.path_points) - current_pos, axis=1)
         # Get the index of the nearest point
         index = np.argmin(distances)
+
+        closest_point = np.array(self.path_points[index])
+        vec_to_point = closest_point - current_pos
+        dot_product = np.dot(heading_vec, vec_to_point)
+
+        if dot_product < 0 and distances[index] < 0.1:
+            # If the closest point is behind the car, choose the next point
+            index = min(index + 1, len(self.path_points) - 1)
+
+
         self.get_logger().info(f'Nearest path point index: {index}, position: {self.path_points[index]}')
         # Return the nearest points
         if index + num_points >= len(self.path_points):

@@ -12,7 +12,8 @@ def main():
 
     car_state_node = CarStateNode()
     path_points_node = PathPointsNode()
-    car_control_node = CarControlNode(car_state_node, path_points_node, config['model_path'])
+    car_control_node = CarControlNode(car_state_node, path_points_node, 
+                                      config['model_path'], config['N_steps'], config['dt'])
 
     executor = MultiThreadedExecutor()
     executor.add_node(car_state_node)

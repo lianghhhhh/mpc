@@ -34,7 +34,7 @@ def denormalize(data, name, scaler):
     if name == "u":
         data = scaler.inverse_transform(data.reshape(-1, 4)).reshape(data.shape)
     elif name == "x":
-        data[:2] = scaler.inverse_transform(data[:2])
+        data = scaler.inverse_transform(data)
     return data
 
 def angleToDegree(data):
@@ -47,7 +47,7 @@ def angleToDegree(data):
     data[:, 3, :] = 0  # set the cosine component to zero
     return data
 
-def loadModelFunc(model_path):
+def loadModelFunc(model_path, dt):
     model = CarPredictor()
     model.load_state_dict(torch.load(f'{model_path}/model_6.pth'))
     device = 'cuda' # if torch.cuda.is_available() else 'cpu'
@@ -60,7 +60,7 @@ def loadModelFunc(model_path):
     output_sym = l4c_model(input_sym)
     A_sym = output_sym[:, :16].reshape((4, 4))  # A: shape (4,4)
     B_sym = output_sym[:, 16:].reshape((4, 4))  # B: shape (4,4)
-    x_next_sym = x_sym + (ca.mtimes(A_sym, x_sym) + ca.mtimes(B_sym, u_sym)) * 0.1
+    x_next_sym = x_sym + (ca.mtimes(A_sym, x_sym) + ca.mtimes(B_sym, u_sym)) * dt
     nn_model_func = ca.Function('nn_model_func', [input_sym], [x_next_sym], ['input'], ['x_next'])
 
     return nn_model_func, l4c_model.shared_lib_dir, l4c_model.name
@@ -100,7 +100,7 @@ def createMpcSolver(nn_model_func, N=10):
     opti.solver('ipopt', opts)
     return opti, u_pred, next_x_pred, current_x, target_path
 
-def createAcadosSolver(nn_model_func, lib_dir, lib_name, N=10):
+def createAcadosSolver(nn_model_func, lib_dir, lib_name, N, dt):
     ocp = AcadosOcp()
     model = AcadosModel()
     model.name = 'car_model'
@@ -118,17 +118,20 @@ def createAcadosSolver(nn_model_func, lib_dir, lib_name, N=10):
     ocp.model = model
 
     ocp.solver_options.N_horizon = N
-    Tf = N * 0.1  # (N steps) * (0.1 s/step)
+    Tf = N * dt  # (N steps) * (dt s/step)
     ocp.solver_options.tf = Tf
 
     Q_pos = np.diag([1000.0, 1000.0]) # Position cost
-    R_ctrl = np.diag([0.0001, 0.0001, 0.0001, 0.0001]) # Control effort cost
-    W_speed = 0.01
+    R_ctrl = np.diag([0.001, 0.001, 0.001, 0.001]) # Control effort cost
+    W_speed = 0.1
 
     position_error = x[:2] - p
 
     stage_cost_expr = ca.mtimes([position_error.T, ca.DM(Q_pos), position_error]) \
-                      + ca.mtimes([u.T, ca.DM(R_ctrl), u])
+                      + ca.mtimes([u.T, ca.DM(R_ctrl), u]) \
+                      + W_speed * (ca.fabs(u[0] - u[2])) \
+                      + W_speed * (ca.fabs(u[1] - u[3]))
+
     terminal_cost_expr = ca.mtimes([position_error.T, ca.DM(Q_pos), position_error])
 
     # --- Set cost for STAGE 0 ---
@@ -141,7 +144,22 @@ def createAcadosSolver(nn_model_func, lib_dir, lib_name, N=10):
 
     # --- Set cost for STAGE N (Terminal) ---
     ocp.cost.cost_type_e = 'EXTERNAL'
-    ocp.model.cost_expr_ext_cost_e = terminal_cost_expr   
+    ocp.model.cost_expr_ext_cost_e = terminal_cost_expr
+
+    # # for stage 0: forward progress constraint, to encourage moving forward
+    # dx = x_next[0] - x[0]
+    # dz = x_next[1] - x[1]
+    # heading_x = x[3]
+    # heading_z = x[2]
+    # forward_progress = dx * heading_x + dz * heading_z
+    # ocp.model.con_h_expr_0 = forward_progress
+    # ocp.constraints.lh_0 = np.array([0.0])   # Lower Bound (0.0)
+    # ocp.constraints.uh_0 = np.array([1e9])   # Upper Bound (Infinity)
+    # ocp.cost.zl_0 = np.array([10000.0]) # Linear penalty (Very strong)
+    # ocp.cost.Zl_0 = np.array([10000.0]) # Quadratic penalty
+    # ocp.cost.zu_0 = np.array([0.0])     # No penalty for being "too forward"
+    # ocp.cost.Zu_0 = np.array([0.0])
+    # ocp.constraints.idxsh_0 = np.array([0])
 
     ocp.constraints.x0 = np.zeros(4)
     ocp.parameter_values = np.zeros(2)
