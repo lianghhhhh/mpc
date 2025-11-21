@@ -23,11 +23,12 @@ def computeTarget(u_tensor, x_data, A, B, dt=0.1):
 def normalize(data, name, scaler):
     if name == "u":
         data = scaler.transform(data)
-    elif name == "state": # x, z positions only
+    elif name == "state":
         data = np.array(data)
         data[:2] = scaler.transform(data[:2].reshape(-1, 2)).reshape(data[:2].shape)
     elif name == "path":
-        data = scaler.transform(data)
+        data = np.array(data)
+        data[:, :2] = scaler.transform(data[:, :2].reshape(-1, 2)).reshape(data[:, :2].shape)
     return data
 
 def denormalize(data, name, scaler):
@@ -35,6 +36,9 @@ def denormalize(data, name, scaler):
         data = scaler.inverse_transform(data.reshape(-1, 4)).reshape(data.shape)
     elif name == "x":
         data = scaler.inverse_transform(data)
+    elif name =="state":
+        data = np.array(data)
+        data[:2] = scaler.inverse_transform(data[:2].reshape(-1, 2)).reshape(data[:2].shape)
     return data
 
 def angleToDegree(data):
@@ -49,7 +53,7 @@ def angleToDegree(data):
 
 def loadModelFunc(model_path, dt):
     model = CarPredictor()
-    model.load_state_dict(torch.load(f'{model_path}/model_6.pth'))
+    model.load_state_dict(torch.load(f'{model_path}/model.pth'))
     device = 'cuda' # if torch.cuda.is_available() else 'cpu'
     model.to(device)
     model.eval()
@@ -107,7 +111,7 @@ def createAcadosSolver(nn_model_func, lib_dir, lib_name, N, dt):
 
     x = ca.SX.sym('x', 4)
     u = ca.SX.sym('u', 4)
-    p = ca.SX.sym('p', 2)
+    p = ca.SX.sym('p', 4)
     input_sym = ca.vertcat(u, x)
     x_next = nn_model_func(input_sym)
 
@@ -122,15 +126,27 @@ def createAcadosSolver(nn_model_func, lib_dir, lib_name, N, dt):
     ocp.solver_options.tf = Tf
 
     Q_pos = np.diag([1000.0, 1000.0]) # Position cost
-    R_ctrl = np.diag([0.001, 0.001, 0.001, 0.001]) # Control effort cost
-    W_speed = 0.1
+    R_ctrl = np.diag([0.01, 0.01, 0.01, 0.01]) # Control effort cost
+    W_speed = 1
+    W_angle = 10
 
-    position_error = x[:2] - p
+    position_error = x[:2] - p[:2]
+
+    car_cos = x[3]
+    car_sin = x[2]
+    p_cos = p[3]
+    p_sin = p[2]
+    heading_dot = car_cos * p_cos + car_sin * p_sin
+    orientation_error = W_angle * (1 - heading_dot)**2
+
+    forward_velocity = (u[0] + u[1] + u[2] + u[3]) / 4.0
 
     stage_cost_expr = ca.mtimes([position_error.T, ca.DM(Q_pos), position_error]) \
                       + ca.mtimes([u.T, ca.DM(R_ctrl), u]) \
                       + W_speed * (ca.fabs(u[0] - u[2])) \
                       + W_speed * (ca.fabs(u[1] - u[3]))
+                    #    + orientation_error \
+                    #    -1.0 * forward_velocity
 
     terminal_cost_expr = ca.mtimes([position_error.T, ca.DM(Q_pos), position_error])
 
@@ -146,23 +162,8 @@ def createAcadosSolver(nn_model_func, lib_dir, lib_name, N, dt):
     ocp.cost.cost_type_e = 'EXTERNAL'
     ocp.model.cost_expr_ext_cost_e = terminal_cost_expr
 
-    # # for stage 0: forward progress constraint, to encourage moving forward
-    # dx = x_next[0] - x[0]
-    # dz = x_next[1] - x[1]
-    # heading_x = x[3]
-    # heading_z = x[2]
-    # forward_progress = dx * heading_x + dz * heading_z
-    # ocp.model.con_h_expr_0 = forward_progress
-    # ocp.constraints.lh_0 = np.array([0.0])   # Lower Bound (0.0)
-    # ocp.constraints.uh_0 = np.array([1e9])   # Upper Bound (Infinity)
-    # ocp.cost.zl_0 = np.array([10000.0]) # Linear penalty (Very strong)
-    # ocp.cost.Zl_0 = np.array([10000.0]) # Quadratic penalty
-    # ocp.cost.zu_0 = np.array([0.0])     # No penalty for being "too forward"
-    # ocp.cost.Zu_0 = np.array([0.0])
-    # ocp.constraints.idxsh_0 = np.array([0])
-
     ocp.constraints.x0 = np.zeros(4)
-    ocp.parameter_values = np.zeros(2)
+    ocp.parameter_values = np.zeros(4)
     ocp.constraints.lbu = np.array([-1.0, -1.0, -1.0, -1.0])
     ocp.constraints.ubu = np.array([1.0, 1.0, 1.0, 1.0])
     ocp.constraints.idxbu = np.array([0, 1, 2, 3])
@@ -176,3 +177,5 @@ def createAcadosSolver(nn_model_func, lib_dir, lib_name, N, dt):
 
     acados_solver = AcadosOcpSolver(ocp, json_file='acados_ocp.json')
     return acados_solver
+
+

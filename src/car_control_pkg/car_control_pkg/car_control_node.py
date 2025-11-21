@@ -23,6 +23,8 @@ class CarControlNode(Node):
 
         self.N_steps = N_steps
         self.dt = dt
+        self.prev_u = np.zeros((4,))
+        self.delay = 0.02  # seconds
 
         # MPC/cache handles
         self._model_func, self._lib_dir, self._lib_name = loadModelFunc(self.model_path, self.dt)
@@ -30,7 +32,7 @@ class CarControlNode(Node):
         self._acados_solver = createAcadosSolver(self._model_func, self._lib_dir, self._lib_name, self.N_steps, self.dt)
         
         # Run MPC periodically while the node is spinning (10 Hz)
-        self.create_timer(0.1, lambda: self.find_control_command())
+        self.create_timer(0.001, lambda: self.find_control_command())
 
     def publish_control_command(self, control_input):
         self.get_logger().info(f'Publishing control command: {control_input}')
@@ -54,12 +56,12 @@ class CarControlNode(Node):
         self.pred_path_pub.publish(msg)
 
     def find_control_command(self):
-        start_time = self.get_clock().now()
         current_state = self.car_state_node.car_state
-        path_points = self.path_points_node.get_near_points(current_state, num_points=(self.N_steps+1))
         if len(current_state) != 4:
             self.get_logger().warn(f'Invalid car state received: {current_state}')
             return
+
+        path_points = self.path_points_node.get_near_points(current_state, num_points=(self.N_steps+1))
         if len(path_points) != (self.N_steps+1):
             self.get_logger().warn(f'Invalid path points received: {path_points}')
             return
@@ -67,6 +69,7 @@ class CarControlNode(Node):
         self.get_logger().info(f'Current state: {current_state}')
         self.get_logger().info(f'Target path: {path_points}')
         
+        # use current state and path points to compute optimal control
         current_state = normalize(current_state, "state", self.x_scaler)
         path_points = normalize(path_points, "path", self.x_scaler)
         # state_data = ca.DM(current_state)
@@ -76,6 +79,8 @@ class CarControlNode(Node):
         # self._solver.set_value(self._target_path, target_path_data)
         self._acados_solver.set(0, "lbx", current_state)
         self._acados_solver.set(0, "ubx", current_state)
+        self._acados_solver.set(0, "x", current_state)
+        self._acados_solver.set(0, "u", self.prev_u)  # warm start with previous control
         for t in range(self.N_steps+1):
             self._acados_solver.set(t, "p", path_points[t, :])
 
@@ -91,19 +96,17 @@ class CarControlNode(Node):
                 return
 
             control_input = self._acados_solver.get(0, "u") # get optimal control at time 0
+            self.prev_u = control_input  # store for warm starty
             control_input = denormalize(control_input, "u", self.u_scaler)
             predict_path = []
             for t in range(self.N_steps+1):
                 pred_postion = self._acados_solver.get(t, "x")[:2]
                 pred_postion = denormalize(pred_postion.reshape(1, -1), "x", self.x_scaler)
                 predict_path.append(pred_postion)
-
-            end_time = self.get_clock().now()
-            elapsed_time = (end_time - start_time).nanoseconds / 1e9 # seconds
-            self.get_logger().info(f'MPC computation time: {elapsed_time:.6f} s')
             
             self.publish_control_command(control_input)
             self.publish_predicted_path(np.array(predict_path).reshape(self.N_steps+1, 2))
+            self.car_state_node.reset_state()
 
         except Exception as e:
             self.get_logger().error(f'MPC solver failed: {e}')

@@ -21,3 +21,6 @@ class CarStateNode(Node):
         sin_angle = np.sin(angle)
         cos_angle = np.cos(angle)
         self.car_state = [data[0], data[1], sin_angle, cos_angle]
+
+    def reset_state(self):
+        self.car_state = []
